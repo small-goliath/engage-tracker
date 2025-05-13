@@ -1,4 +1,6 @@
 import os
+import time
+import traceback
 from typing import List, Tuple
 from dotenv import load_dotenv
 from instagrapi import Client
@@ -25,9 +27,17 @@ class Insta():
             return list({comment.user.username for comment in comments[0] if comment.user.username})
         except Exception as e:
             print(f"Failed search comments: {uri}")
-            print(e)
+            raise e
         finally:
             self.client.dump_settings("session.json")
+
+    def get_comment_until_success(self, link, delay=5):
+        while True:
+            try:
+                return self.get_comment_by(link)
+            except Exception as e:
+                print(f"예외 발생: {e}, {delay}초 후 재시도...")
+                time.sleep(delay)
             
     def get_like_by(self, uri: str) -> list[str]:
         try:
