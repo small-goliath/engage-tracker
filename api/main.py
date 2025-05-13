@@ -37,6 +37,7 @@ async def upload_file(file: UploadFile = File(...)):
         re.MULTILINE
     )
 
+    # 품앗이 대상 피드/릴스 캐치
     messages = message_pattern.findall(text)
     date_pattern = re.compile(r"^--------------- (\d{4}년 \d{1,2}월 \d{1,2}일 [^ ]+) ---------------$")
     current_date = None
@@ -44,9 +45,11 @@ async def upload_file(file: UploadFile = File(...)):
     result = {}
 
     for line in text.splitlines():
+        # 불필요 메시지 건너뛰기
         if any(reject in line for reject in reject_messages):
             continue
 
+        # 카톡 내용 날짜 캐치
         date_match = date_pattern.match(line)
         if date_match:
             current_date = date_match.group(1)
@@ -54,11 +57,12 @@ async def upload_file(file: UploadFile = File(...)):
         
         if current_date:
             for match in messages:
+                # 품앗이 대상 피드/릴스가 있는 메시지면 해당 날짜에 대해서 카톡 닉네임과 인스타 링크 맵핑
                 if match[3] in line:
                     if current_date not in result:
                         result[current_date] = []
                     result[current_date].append({
-                        "username": match[0],
+                        "username": str(match[0]).split("@")[1],
                         "link": match[3].strip()
                     })
                     messages.remove(match)
@@ -68,6 +72,7 @@ async def upload_file(file: UploadFile = File(...)):
     today = datetime.datetime.now()
     one_week_ago = today - datetime.timedelta(days=7)
 
+    # 일주일 이전 품앗이 요청건에 대해서 개인별 카운팅
     for date_str, entries in result.items():
         year, month, day = map(int, re.findall(r'\d+', date_str))
         date = datetime.datetime(year, month, day)
@@ -82,42 +87,40 @@ async def upload_file(file: UploadFile = File(...)):
 
     final_counts = {f"{username}": f"{count}/{limit_by_weeks}" for (username, week_range), count in username_counts.items()}
 
-    notification_message = await generate_notification_message(final_counts)
-    catcha_outsiders += notification_message
+    catcha_outsiders += "[개인별 품앗이 요청 건]\n" + '\n'.join([f"{k}: {v}" for k, v in final_counts.items()]) + "\n\n\n"
 
+    # 품앗이 안한 인원 선별 (병렬수행)
     async def get_user_actions(entry, executor):
         loop = asyncio.get_event_loop()
+        # 좋아요는 인스타그램 정책상 랜덤으로 최대 100여건만 받을 수 있어서 체크 못함
         comment_by = await loop.run_in_executor(executor, insta.get_comment_by, entry['link'])
 
         if comment_by is None:
             return [], entry['link']
 
-        doesnt_do = [
+        outsiders = [
             user for user in current_users if user not in comment_by
         ]
-        doesnt_do = [user for user in doesnt_do if user != entry['username']]
+        outsiders = [user for user in outsiders if user != entry['username']]
 
-        return doesnt_do, entry['link']
+        return outsiders, entry['link']
 
     pool = ThreadPoolExecutor()
 
     try:
-        notification_message = ""
+        message = ""
         tasks = [get_user_actions(entry, pool) for entries in result.values() for entry in entries]
         results = await asyncio.gather(*tasks)
         if results is not None:
-            for doesnt_do, link in results:
-                if doesnt_do:
-                    notification_message += f"[{link}] 안한 사람:\n{doesnt_do}\n"
+            for outsiders, link in results:
+                if outsiders:
+                    message += f"[{link}] 안한 사람:\n{outsiders}\n"
         
-            catcha_outsiders += notification_message
+            catcha_outsiders += message
     finally:
         pool.shutdown()
 
     return {"outsiders": catcha_outsiders}
-
-async def generate_notification_message(final_counts):
-    return '\n'.join([f"{k}: {v}" for k, v in final_counts.items()]) + "\n\n\n"
 
 @app.post("/api/py/login/instagram")
 async def login_instagram(body: InstagramLogin):
