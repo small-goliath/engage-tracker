@@ -6,9 +6,8 @@
     "fastapi-dev": "python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt && python3 -m uvicorn api.main:app --reload",
     "next-dev": "next dev",
     "dev": "concurrently \"npm run next-dev\" \"npm run fastapi-dev\"",
-    "prod": "concurrently \"npm run start\" \"npm run fastapi-dev\"",
     "build": "next build",
-    "start": "next start",
+    "start": "concurrently \"next start\" \"npm run fastapi-dev\"",
     "lint": "next lint"
   },
   "dependencies": {
