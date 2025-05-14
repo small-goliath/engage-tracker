@@ -1,12 +1,10 @@
 import asyncio
-import datetime
-import time
-import re
-from fastapi import FastAPI, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from instagrapi.exceptions import FeedbackRequired
+import datetime
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+import re
 from api.insta import Insta
 from api.model.payload import InstagramLogin, LimitByWeeks
 
@@ -29,7 +27,6 @@ reject_messages = ["님을 내보냈습니다.", "님이 들어왔습니다.", "
 
 @app.post("/api/py/files")
 async def upload_file(file: UploadFile = File(...)):
-    print("품앗이 브레이커들 잡으러 가는 중...")
     content = await file.read()
     text = content.decode('utf-8')
 
@@ -39,9 +36,7 @@ async def upload_file(file: UploadFile = File(...)):
     )
 
     # 품앗이 대상 피드/릴스 캐치
-    print("품앗이 대상 피드 캐치 중...")
     messages = message_pattern.findall(text)
-    print(f"품앗이 대상 피드 건수: {len(messages)}개")
     date_pattern = re.compile(r"^--------------- (\d{4}년 \d{1,2}월 \d{1,2}일 [^ ]+) ---------------$")
     current_date = None
     
@@ -50,21 +45,17 @@ async def upload_file(file: UploadFile = File(...)):
     for line in text.splitlines():
         # 불필요 메시지 건너뛰기
         if any(reject in line for reject in reject_messages):
-            print("건너뛰기...")
             continue
 
         # 카톡 내용 날짜 캐치
         date_match = date_pattern.match(line)
         if date_match:
             current_date = date_match.group(1)
-            print("날짜 캐치!")
             continue
         
-        # 품앗이 대상 피드/릴스가 있는 메시지면 해당 날짜에 대해서 카톡 닉네임과 인스타 링크 맵핑
-        # 날짜를 알아야하기 때문에 모든 라인에 대해서 실행함
-        print("품앗이 대상 피드 날짜별로 맵핑 중...")
         if current_date:
             for match in messages:
+                # 품앗이 대상 피드/릴스가 있는 메시지면 해당 날짜에 대해서 카톡 닉네임과 인스타 링크 맵핑
                 if match[3] in line:
                     if current_date not in result:
                         result[current_date] = []
@@ -80,7 +71,6 @@ async def upload_file(file: UploadFile = File(...)):
     one_week_ago = today - datetime.timedelta(days=7)
 
     # 일주일 이전 품앗이 요청건에 대해서 개인별 카운팅
-    print("개인별 품앗이 요청건 카운트 중...")
     for date_str, entries in result.items():
         year, month, day = map(int, re.findall(r'\d+', date_str))
         date = datetime.datetime(year, month, day)
@@ -99,20 +89,15 @@ async def upload_file(file: UploadFile = File(...)):
     for k, v in final_counts.items():
         catcha_rule_breakers[k] = v
 
-    # 품앗이 안한 인원 선별
-    print("품앗이 안한 인원 선별 중...(오래걸림)")
-    async def get_user_actions(entry):
+    # 품앗이 안한 인원 선별 (병렬수행)
+    async def get_user_actions(entry, executor):
+        loop = asyncio.get_event_loop()
         # 좋아요는 인스타그램 정책상 랜덤으로 최대 100여건만 받을 수 있어서 체크 못함
-        # 인스타그램 정책상 too many request가 발생확률이 높아도 동기로 하나씩 천천히 가져와야 함
+        # We limit how often you can do certain things on Instagram to protect our community. Tell us if you think we made a mistake
+        comment_by = await loop.run_in_executor(executor, insta.get_comment_by, entry['link'])
 
-        comment_by = []
-
-        while not comment_by:
-            comment_by = insta.get_comment_until_success(entry['link'])
-            print(f"{entry['link']}: {comment_by}")
-
-        # if comment_by is None:
-        #     return [], entry['link']
+        if comment_by is None:
+            return ["[인스타그램 정책 위반]"], entry['link']
 
         outsiders = [
             user for user in current_users if user not in comment_by
@@ -121,14 +106,18 @@ async def upload_file(file: UploadFile = File(...)):
 
         return outsiders, entry['link']
 
+    pool = ThreadPoolExecutor()
     catcha_outsiders = {}
-    for entries in result.values():
-        for entry in entries:
-            actions = await get_user_actions(entry)
-            print(actions)
-            outsiders, link = actions
-            if outsiders:
-                catcha_outsiders[link] = outsiders
+    try:
+        tasks = [get_user_actions(entry, pool) for entries in result.values() for entry in entries]
+        results = await asyncio.gather(*tasks)
+        
+        if results is not None:
+            for outsiders, link in results:
+                if outsiders:
+                    catcha_outsiders[link] = outsiders
+    finally:
+        pool.shutdown()
 
     return {"rule_breakers": catcha_rule_breakers, "outsiders": catcha_outsiders}
 

@@ -20,24 +20,17 @@ class Insta():
     def get_comment_by(self, uri: str) -> list[str]:
         try:
             print(f"{uri} 댓글 가져오는 중...")
+            time.sleep(5)
             self.client.load_settings("session.json")
             media_pk = self.client.media_pk_from_url(uri)
             media_id = self.client.media_id(media_pk)
             comments: Tuple[List[Comment], str] = self.client.media_comments_chunk(media_id=media_id, max_amount=10000)
+            print(comments)
             return list({comment.user.username for comment in comments[0] if comment.user.username})
         except Exception as e:
             print(f"Failed search comments: {uri}")
-            raise e
         finally:
             self.client.dump_settings("session.json")
-
-    def get_comment_until_success(self, link, delay=5):
-        while True:
-            try:
-                return self.get_comment_by(link)
-            except Exception as e:
-                print(f"예외 발생: {e}, {delay}초 후 재시도...")
-                time.sleep(delay)
             
     def get_like_by(self, uri: str) -> list[str]:
         try:
